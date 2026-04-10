@@ -1,80 +1,110 @@
 # reproducer-53517
 
-This project uses Quarkus, the Supersonic Subatomic Java Framework.
+This repo reproduces a Quarkus native-image failure when `migrate_ddl` runs Flyway against an Oracle JDBC URL.
 
-If you want to learn more about Quarkus, please visit its website: <https://quarkus.io/>.
+The native runner is expected to fail with:
 
-## Running the application in dev mode
-
-You can run your application in dev mode that enables live coding using:
-
-```shell script
-./mvnw quarkus:dev -Dquarkus.args='migrate_ddl --help'
+```text
+[org.acme.flyway.BusinessFlywayMigrationService] (main) Migrating tenant db source=tenant_a phase=baseline locations=[classpath:flyway-migrate/acme/0_baseline] table=repro_fw_tenant_a_baseline_hist
+org.flywaydb.core.api.FlywayException: No JDBC driver found to handle jdbc:oracle:thin:@//localhost:1521/XEPDB1. See https://rd.gt/423f9a6 for troubleshooting
 ```
 
-> **_NOTE:_**  Quarkus now ships with a Dev UI, which is available in dev mode only at <http://localhost:8080/q/dev/>.
+## Requirements
 
-## Packaging and running the application
+- Linux or macOS with `bash`
+- Docker with a running daemon and permission to use it
+- Java 21 to run `./mvnw`
+- Internet access to pull:
+  - `gvenzl/oracle-xe:21`
+  - `quay.io/quarkus/ubi9-quarkus-mandrel-builder-image:jdk-25`
+- Enough memory for native-image container builds
+  - Expect several GB of RAM usage
+  - Expect the native build to take multiple minutes
 
-The application can be packaged using:
+Notes:
 
-```shell script
-./mvnw package
+- Local GraalVM is not required. The script uses Quarkus container-based native builds.
+- The reproduction uses `localhost:1521` by default.
+- The Oracle container is started to match the intended runtime setup, but the failure happens before Flyway successfully opens a JDBC connection.
+
+## Quick Start
+
+Run:
+
+```bash
+./reproduce.sh
 ```
 
-It produces the `quarkus-run.jar` file in the `target/quarkus-app/` directory.
-Be aware that it’s not an _über-jar_ as the dependencies are copied into the `target/quarkus-app/lib/` directory.
+The script will:
 
-The application is now runnable using `java -jar target/quarkus-app/quarkus-run.jar`.
+1. Start or reuse an Oracle XE container named `repro-oracle-xe`
+2. Build the app in native mode with `-Dquarkus.native.container-build=true`
+3. Run the native executable with `migrate_ddl`
+4. Assert that the expected Flyway JDBC-driver error appears
 
-If you want to build an _über-jar_, execute the following command:
+If the expected failure is reproduced, the script exits successfully and prints the log file locations.
+If the native command succeeds or fails for a different reason, the script exits with a non-zero status.
 
-```shell script
-./mvnw package -Dquarkus.package.jar.type=uber-jar
+## Expected Result
+
+During the native run, you should see output like:
+
+```text
+123' REPRO_DB_TENANT_B_URL='jdbc:oracle:thin:@//localhost:1521/XEPDB1' REPRO_DB_TENANT_B_USERNAME='app_tenant_b' REPRO_DB_TENANT_B_PASSWORD='TENANT_B_PASS_123' REPRO_FLYWAY_TENANT_DB_SOURCES='tenant_a,tenant_b' REPRO_FLYWAY_PATCH_ENABLED=true REPRO_FLYWAY_CUTOVER_VERSION='20260325.0000.00' ./target/reproducer-53517-1.0.0-SNAPSHOT-runner migrate_ddl
+__  ____  __  _____   ___  __ ____  ______
+ --/ __ \/ / / / _ | / _ \/ //_/ / / / __/
+ -/ /_/ / /_/ / __ |/ , _/ ,< / /_/ /\ \
+--\___\_\____/_/ |_/_/|_/_/|_|\____/___/
+2026-04-10 13:57:07,532 INFO  [org.acme.flyway.BusinessFlywayMigrationService] (main) Business Flyway migration is disabled by configuration.
+2026-04-10 13:57:07,532 INFO  [io.quarkus] (main) reproducer-53517 1.0.0-SNAPSHOT native (powered by Quarkus 3.34.3) started in 0.013s.
+2026-04-10 13:57:07,532 INFO  [io.quarkus] (main) Profile prod activated.
+2026-04-10 13:57:07,532 INFO  [io.quarkus] (main) Installed features: [agroal, cdi, flyway, jdbc-oracle, narayana-jta, picocli, smallrye-context-propagation]
+2026-04-10 13:57:07,534 INFO  [org.acme.flyway.BusinessFlywayMigrationService] (main) Starting on-demand business Flyway migration with cutover version 20260325.0000.00 for tenant db source tenant_a
+2026-04-10 13:57:07,534 INFO  [org.acme.flyway.BusinessFlywayMigrationService] (main) Migrating tenant db source=tenant_a phase=baseline locations=[classpath:flyway-migrate/acme/0_baseline] table=repro_fw_tenant_a_baseline_hist
+org.flywaydb.core.api.FlywayException: No JDBC driver found to handle jdbc:oracle:thin:@//localhost:1521/XEPDB1. See https://rd.gt/423f9a6 for troubleshooting
+        at org.flywaydb.core.internal.jdbc.DriverDataSource.<init>(DriverDataSource.java:165)
+        at org.flywaydb.core.internal.jdbc.DriverDataSource.<init>(DriverDataSource.java:97)
+        at org.flywaydb.core.api.configuration.ClassicConfiguration.setDataSource(ClassicConfiguration.java:1528)
+        at org.flywaydb.core.api.configuration.FluentConfiguration.dataSource(FluentConfiguration.java:656)
+        at org.acme.flyway.BusinessFlywayFactory.createFlyway(BusinessFlywayFactory.java:110)
+        at org.acme.flyway.BusinessFlywayFactory.lambda$resolveFlyway$1(BusinessFlywayFactory.java:92)
+        at java.base@21.0.6/java.util.concurrent.ConcurrentHashMap.computeIfAbsent(ConcurrentHashMap.java:1708)
+        at org.acme.flyway.BusinessFlywayFactory.resolveFlyway(BusinessFlywayFactory.java:90)
+        at org.acme.flyway.BusinessFlywayFactory_ClientProxy.resolveFlyway(Unknown Source)
+        at org.acme.flyway.BusinessFlywayMigrationService.resolveFlyway(BusinessFlywayMigrationService.java:134)
+        at org.acme.flyway.BusinessFlywayMigrationService.migrateDomain(BusinessFlywayMigrationService.java:126)
+        at org.acme.flyway.BusinessFlywayMigrationService.migrateResolvedTenant(BusinessFlywayMigrationService.java:113)
+        at org.acme.flyway.BusinessFlywayMigrationService.migrateTenant(BusinessFlywayMigrationService.java:71)
+        at org.acme.flyway.BusinessFlywayMigrationService_ClientProxy.migrateTenant(Unknown Source)
+        at org.acme.MigrateDdlCommand.call(MigrateDdlCommand.java:42)
+        at org.acme.MigrateDdlCommand.call(MigrateDdlCommand.java:14)
+        at picocli.CommandLine.executeUserObject(CommandLine.java:2031)
+        at picocli.CommandLine.access$1500(CommandLine.java:148)
+        at picocli.CommandLine$RunLast.executeUserObjectOfLastSubcommandWithSameParent(CommandLine.java:2469)
+        at picocli.CommandLine$RunLast.handle(CommandLine.java:2461)
+        at picocli.CommandLine$RunLast.handle(CommandLine.java:2423)
+        at picocli.CommandLine$AbstractParseResultHandler.execute(CommandLine.java:2277)
+        at picocli.CommandLine$RunLast.execute(CommandLine.java:2425)
+        at io.quarkus.picocli.runtime.PicocliRunner$EventExecutionStrategy.execute(PicocliRunner.java:26)
+        at picocli.CommandLine.execute(CommandLine.java:2174)
+        at io.quarkus.picocli.runtime.PicocliRunner.run(PicocliRunner.java:40)
+        at io.quarkus.runtime.ApplicationLifecycleManager.run(ApplicationLifecycleManager.java:149)
+        at io.quarkus.runtime.Quarkus.run(Quarkus.java:79)
+        at io.quarkus.runtime.Quarkus.run(Quarkus.java:50)
+        at io.quarkus.runner.GeneratedMain.main(Unknown Source)
+        at java.base@21.0.6/java.lang.invoke.LambdaForm$DMH/sa346b79c.invokeStaticInit(LambdaForm$DMH)
 ```
 
-The application, packaged as an _über-jar_, is now runnable using `java -jar target/*-runner.jar`.
+The script writes:
 
-## Creating a native executable
+- native build output to `target/reproduce-native-build.log`
+- native run output to `target/reproduce-native-run.log`
 
-You can create a native executable using:
+## Manual Path
 
-```shell script
-./mvnw package -Dnative
-```
+If you want to run the steps manually, use:
 
-Or, if you don't have GraalVM installed, you can run the native executable build in a container using:
-
-```shell script
-./mvnw package -Dnative -Dquarkus.native.container-build=true
-```
-
-You can then execute your native executable with: `./target/reproducer-53517-1.0.0-SNAPSHOT-runner`
-
-If you want to learn more about building native executables, please consult <https://quarkus.io/guides/maven-tooling>.
-
-## Related Guides
-
-- Picocli ([guide](https://quarkus.io/guides/picocli)): Develop command line applications with Picocli
-
-## CLI Usage
-
-The packaged application exposes a root command with the `migrate_ddl` subcommand.
-You can inspect the available options with:
-
-```shell script
-java -jar target/quarkus-app/quarkus-run.jar --help
-java -jar target/quarkus-app/quarkus-run.jar migrate_ddl --help
-```
-
-
-## Local Oracle XE Multi-Tenant Verification
-
-You can verify the CLI against multiple tenant schemas in one Oracle XE container by creating one user per tenant in the same `XEPDB1` database.
-
-Start Oracle XE with the first tenant user:
-
-```shell script
+```bash
 docker run -d \
   --name repro-oracle-xe \
   -p 1521:1521 \
@@ -84,110 +114,24 @@ docker run -d \
   gvenzl/oracle-xe:21
 ```
 
-Wait until the DB is ready to use
-```shell script
-docker logs -f repro-oracle-xe
-
-#########################
-DATABASE IS READY TO USE!
-#########################
+```bash
+./mvnw -q -DskipTests -Dnative -Dquarkus.native.container-build=true package
 ```
 
-Create or reset the second tenant schema user `app_tenant_b` after the container is ready.
-This example uses a shell-safe password to avoid quoting issues during local verification:
-
-```shell script
-docker exec -i repro-oracle-xe sqlplus / as sysdba <<'SQL'
-ALTER SESSION SET CONTAINER = XEPDB1;
-CREATE USER app_tenant_b IDENTIFIED BY "TENANT_B_PASS_123";
-GRANT CONNECT, RESOURCE TO app_tenant_b;
-GRANT CREATE VIEW TO app_tenant_b;
-GRANT UNLIMITED TABLESPACE TO app_tenant_b;
-SQL
-```
-
-If `app_tenant_b` already exists, reset its password instead:
-
-```shell script
-docker exec -i repro-oracle-xe sqlplus / as sysdba <<'SQL'
-ALTER SESSION SET CONTAINER = XEPDB1;
-ALTER USER app_tenant_b IDENTIFIED BY "TENANT_B_PASS_123";
-GRANT CREATE VIEW TO app_tenant_b;
-SQL
-```
-
-Verify that the second tenant user can log in before running Flyway:
-
-```shell script
-docker exec -i repro-oracle-xe sqlplus -L 'app_tenant_b/TENANT_B_PASS_123@XEPDB1' <<'SQL'
-SELECT USER FROM dual;
-EXIT
-SQL
-```
-
-Package the CLI once:
-
-```shell script
-./mvnw -q -DskipTests package
-```
-
-Run one multi-tenant migration by listing both tenants in `REPRO_FLYWAY_TENANT_DB_SOURCES` and omitting `--tenant`:
-
-```shell script
+```bash
 REPRO_DB_TENANT_A_URL='jdbc:oracle:thin:@//localhost:1521/XEPDB1' \
 REPRO_DB_TENANT_A_USERNAME='app_tenant_a' \
 REPRO_DB_TENANT_A_PASSWORD='TENANT_A_PASS_123' \
-REPRO_DB_TENANT_B_URL='jdbc:oracle:thin:@//localhost:1521/XEPDB1' \
-REPRO_DB_TENANT_B_USERNAME='app_tenant_b' \
-REPRO_DB_TENANT_B_PASSWORD='TENANT_B_PASS_123' \
-REPRO_FLYWAY_TENANT_DB_SOURCES='tenant_a,tenant_b' \
+REPRO_FLYWAY_TENANT_DB_SOURCES='tenant_a' \
 REPRO_FLYWAY_PATCH_ENABLED=true \
 REPRO_FLYWAY_CUTOVER_VERSION='20260325.0000.00' \
-java -jar target/quarkus-app/quarkus-run.jar migrate_ddl
+./target/reproducer-53517-1.0.0-SNAPSHOT-runner migrate_ddl
 ```
 
-Verify that the seeded `USER_INFO` row exists in the `tenant_a` schema:
+## Cleanup
 
-```shell script
-docker exec -i repro-oracle-xe sqlplus -L 'app_tenant_a/TENANT_A_PASS_123@//localhost:1521/XEPDB1' <<'SQL'
-SET PAGESIZE 100
-SET LINESIZE 200
-COLUMN FIRST_NAME FORMAT A12
-COLUMN LAST_NAME FORMAT A12
-COLUMN AD_ACC FORMAT A12
-SELECT ID, FIRST_NAME, LAST_NAME, AD_ACC, ACTIVE
-FROM USER_INFO
-WHERE ID = 0
-  AND AD_ACC = 'system';
-EXIT
-SQL
+To remove the Oracle XE container created for the reproduction:
+
+```bash
+docker rm -f repro-oracle-xe
 ```
-
-Verify that the same seeded row exists in the `tenant_b` schema:
-
-```shell script
-docker exec -i repro-oracle-xe sqlplus -L 'app_tenant_b/TENANT_B_PASS_123@//localhost:1521/XEPDB1' <<'SQL'
-SET PAGESIZE 100
-SET LINESIZE 200
-COLUMN FIRST_NAME FORMAT A12
-COLUMN LAST_NAME FORMAT A12
-COLUMN AD_ACC FORMAT A12
-SELECT ID, FIRST_NAME, LAST_NAME, AD_ACC, ACTIVE
-FROM USER_INFO
-WHERE ID = 0
-  AND AD_ACC = 'system';
-EXIT
-SQL
-```
-
-Expected behavior:
-
-- The CLI resolves the tenants in order: `tenant_a`, then `tenant_b`.
-- Flyway runs sequentially and stops on the first failure.
-- Each tenant schema gets its own Flyway history table and migrated objects.
-- A second identical run should be idempotent apart from normal Flyway "up to date" output.
-
-Suggested negative checks:
-
-- Remove one `REPRO_DB_TENANT_B_*` variable and confirm the command fails.
-- Skip the `app_tenant_b` user creation step and confirm the `tenant_b` migration fails while `tenant_a` may already have completed.
